@@ -1,5 +1,5 @@
 // Planner Financeiro – Service Worker
-const CACHE = 'planner-v1';
+const CACHE = 'planner-v2';
 
 const SHELL = [
   '/',
