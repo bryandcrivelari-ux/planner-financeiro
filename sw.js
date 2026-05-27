@@ -1,16 +1,16 @@
-// Planner Financeiro – Service Worker
-const CACHE = 'planner-v2';
+// Mind Reminders — Service Worker
+const CACHE = 'mind-reminders-v1';
 
 const SHELL = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icon.png',
-  '/icon-192.png',
-  '/icon-512.png',
+  './',
+  'index.html',
+  'manifest.json',
+  'icon.png',
+  'icon-192.png',
+  'icon-512.png',
 ];
 
-// ── Install: cache app shell ──────────────────────────────
+// Install: cache app shell
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE)
@@ -19,7 +19,7 @@ self.addEventListener('install', (e) => {
   );
 });
 
-// ── Activate: remove old caches ──────────────────────────
+// Activate: drop old caches
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
@@ -30,11 +30,10 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// ── Fetch: cache-first for shell, network-first for fonts ─
+// Fetch: network-first for fonts, cache-first for everything else
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
 
-  // Google Fonts – network first, fall back to cache
   if (url.hostname.includes('fonts.')) {
     e.respondWith(
       fetch(e.request)
@@ -48,7 +47,6 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // App shell – cache first
   e.respondWith(
     caches.match(e.request).then(cached => {
       if (cached) return cached;
@@ -60,7 +58,7 @@ self.addEventListener('fetch', (e) => {
           }
           return r;
         })
-        .catch(() => caches.match('/index.html'));
+        .catch(() => caches.match('index.html'));
     })
   );
 });
