@@ -184,6 +184,28 @@
   .cat-name { font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
   .cat-count { font-family:'DM Mono',monospace; font-weight:400; color:var(--muted2); margin-left:4px; letter-spacing:0; }
 
+  /* SOS BUTTON */
+  .btn.sos { background:var(--k-dim); border-color:var(--k); color:var(--k); font-weight:600; }
+  .btn.sos:hover { background:var(--k); color:#fff; }
+
+  /* PRESET PACKS */
+  .pack-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  @media (max-width:480px){ .pack-grid{ grid-template-columns:1fr; } }
+  .pack-btn { text-align:left; background:var(--surface2); border:1px solid var(--border2);
+    border-radius:14px; padding:12px 14px; cursor:pointer; transition:all .15s; font-family:inherit; }
+  .pack-btn:hover { border-color:var(--k); background:var(--surface3); }
+  .pack-btn .pk-name { font-size:13px; font-weight:600; color:var(--text); display:flex; align-items:center; gap:7px; }
+  .pack-btn .pk-sub { font-size:11px; color:var(--muted); margin-top:3px; }
+
+  /* BREATHING GUIDE (SOS) */
+  .breathe { display:none; flex-direction:column; align-items:center; margin-bottom:30px; }
+  .breathe.show { display:flex; }
+  .breathe-ring { width:120px; height:120px; border-radius:50%;
+    background:radial-gradient(circle, var(--k-dim) 0%, transparent 70%);
+    border:2px solid var(--k); animation:breathe 8s ease-in-out infinite; }
+  @keyframes breathe { 0%,100%{ transform:scale(.7); opacity:.55 } 50%{ transform:scale(1.15); opacity:1 } }
+  .breathe-cue { margin-top:18px; font-size:14px; color:var(--k); font-weight:500; letter-spacing:.5px; }
+
   /* TOAST */
   .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px);
     background:var(--surface3); color:var(--text); border:1px solid var(--border2);
@@ -204,6 +226,7 @@
       </div>
     </div>
     <div class="session-ctl">
+      <button class="btn sos" id="sosBtn" title="Injeção de lógica imediata">⚡ Preciso agora</button>
       <button class="btn ghost" id="testBtn">Testar</button>
       <button class="btn primary" id="startBtn">▶ Iniciar sessão</button>
     </div>
@@ -254,6 +277,11 @@
           <button class="btn primary" id="saveBtn" style="flex:2">Adicionar lembrete</button>
           <button class="btn ghost" id="cancelEditBtn" style="display:none;">Cancelar</button>
         </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:24px;">
+        <h2>Pacotes prontos <span class="tag">aplica em 1 clique</span></h2>
+        <div class="pack-grid" id="packGrid"></div>
       </div>
 
       <div class="panel">
@@ -325,7 +353,11 @@
 <!-- FIRE OVERLAY -->
 <div class="overlay" id="overlay">
   <div class="fire-card">
-    <div class="eyebrow">Respira · volta pro processo</div>
+    <div class="eyebrow" id="fireEyebrow">Respira · volta pro processo</div>
+    <div class="breathe" id="breathe">
+      <div class="breathe-ring"></div>
+      <div class="breathe-cue" id="breatheCue">Inspira…</div>
+    </div>
     <div class="phrase" id="firePhrase"></div>
     <button class="btn primary" id="dismissBtn">Voltar ao jogo</button>
     <div class="fire-bar"><i id="fireBar"></i></div>
@@ -359,6 +391,8 @@ let state = {
 };
 let filterCat = null;       // category string currently filtered, or null = todas
 let currentCats = [];       // categories present in the current render (for index lookups)
+let sosMode = false;        // overlay currently in SOS (breathing) mode
+let breatheTimer = null;    // breathing cue interval
 let running = false;
 let sessionStart = 0;
 let nextFire = {};          // id -> timestamp(ms)
@@ -447,6 +481,11 @@ function fire(rem){
 }
 function showNextOverlay(){
   if(fireQueue.length === 0){ closeOverlay(); return; }
+  // garante estado normal (sem respiração / com barra de contagem)
+  sosMode = false; clearInterval(breatheTimer);
+  $('breathe').classList.remove('show');
+  $('fireEyebrow').textContent = 'Respira · volta pro processo';
+  $('fireBar').parentElement.style.display = '';
   const phrase = fireQueue.shift();
   $('firePhrase').textContent = phrase;
   const ov = $('overlay');
@@ -465,9 +504,55 @@ function closeOverlay(){
   clearTimeout(overlayTimer);
   fireQueue = [];
   $('overlay').classList.remove('show');
+  stopSos();
 }
-$('dismissBtn').onclick = ()=> showNextOverlay();
-$('overlay').onclick = (e)=>{ if(e.target === $('overlay')) showNextOverlay(); };
+function dismissOverlay(){
+  if(sosMode){ closeOverlay(); return; }
+  showNextOverlay();
+}
+$('dismissBtn').onclick = dismissOverlay;
+$('overlay').onclick = (e)=>{ if(e.target === $('overlay')) dismissOverlay(); };
+
+// ---------- SOS: injeção de lógica imediata + respiração ----------
+const SOS_FALLBACK = [
+  'Respira fundo. Você controla a decisão, não a carta.',
+  'Solta. A mão acabou. A próxima é nova.',
+  'Decisão certa agora vale mais que recuperar a perda.',
+  'Variância faz parte. Volta pro processo.'
+];
+function pickSosPhrase(){
+  const enabled = state.reminders.filter(r=>r.enabled).map(r=>r.phrase);
+  const pool = enabled.length ? enabled : (state.reminders.length ? state.reminders.map(r=>r.phrase) : SOS_FALLBACK);
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+function startBreathing(){
+  const cue = $('breatheCue');
+  $('breathe').classList.add('show');
+  let inhale = true;
+  cue.textContent = 'Inspira…';
+  clearInterval(breatheTimer);
+  breatheTimer = setInterval(()=>{ inhale = !inhale; cue.textContent = inhale ? 'Inspira…' : 'Expira…'; }, 4000);
+}
+function stopSos(){
+  sosMode = false;
+  clearInterval(breatheTimer);
+  $('breathe').classList.remove('show');
+  $('fireEyebrow').textContent = 'Respira · volta pro processo';
+  $('fireBar').parentElement.style.display = '';
+}
+function sosNow(){
+  // unlock audio on the user gesture
+  try { audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); audioCtx.resume(); } catch(e){}
+  clearTimeout(overlayTimer);
+  fireQueue = [];
+  sosMode = true;
+  $('firePhrase').textContent = pickSosPhrase();
+  $('fireEyebrow').textContent = 'SOS · respira e ancora';
+  $('fireBar').parentElement.style.display = 'none';   // sem contagem: fecha manualmente
+  startBreathing();
+  $('overlay').classList.add('show');
+  playChime();
+}
 
 // ---------- session loop ----------
 function startSession(){
@@ -740,6 +825,48 @@ function seed(){
   save(); renderList(); updateSessionUI(); toast('Exemplos carregados');
 }
 
+// ---------- preset packs ----------
+const PACKS = [
+  { emoji:'🔥', name:'Anti-revanche', sub:'Para o tilt de querer recuperar', items:[
+    ['Não jogue contra ele. Jogue as suas cartas.', 8, 'Tilt de revanche'],
+    ['Recuperar a perda não é um plano. EV é o plano.', 12, 'Tilt de revanche'],
+    ['Vingança não tem EV. Solta.', 10, 'Tilt de revanche'],
+  ]},
+  { emoji:'🎯', name:'Foco & disciplina', sub:'Quando entra no autopilot', items:[
+    ['Uma mão de cada vez. Presença total.', 12, 'Disciplina'],
+    ['Sem autopilot. Cada decisão é uma escolha.', 18, 'Disciplina'],
+    ['Disciplina no fold é onde mora o lucro.', 25, 'Disciplina'],
+  ]},
+  { emoji:'🎲', name:'Aceitar a variância', sub:'Para downswing e bad beats', items:[
+    ['Variância faz parte. O longo prazo recompensa o EV.', 15, 'Variância e longo prazo'],
+    ['Cada mão é independente. A anterior já acabou.', 12, 'Variância e longo prazo'],
+    ['Bad beat não muda que a jogada certa foi certa.', 20, 'Processo vs. resultado'],
+  ]},
+  { emoji:'🧘', name:'Reset físico', sub:'Corpo e respiração', items:[
+    ['Respira fundo. Solta os ombros. Volta pro presente.', 20, 'Fisiologia e presença'],
+    ['Tensão no corpo? Pausa de 30s antes da próxima mão.', 30, 'Fisiologia e presença'],
+    ['Hidrata. Cabeça clara joga melhor.', 45, 'Fisiologia e presença'],
+  ]},
+];
+function renderPacks(){
+  $('packGrid').innerHTML = PACKS.map((p,i)=>`
+    <button class="pack-btn" onclick="applyPack(${i})">
+      <div class="pk-name">${p.emoji} ${escapeHtml(p.name)}</div>
+      <div class="pk-sub">${escapeHtml(p.sub)} · ${p.items.length} frases</div>
+    </button>`).join('');
+}
+function applyPack(i){
+  const p = PACKS[i]; if(!p) return;
+  const now = Date.now();
+  p.items.forEach(([phrase,m,c])=>{
+    const r = { id: uid(), phrase, intervalSec:m*60, enabled:true, category:c };
+    state.reminders.push(r);
+    if(running) nextFire[r.id] = now + r.intervalSec*1000;
+  });
+  save(); renderList(); updateSessionUI();
+  toast('Pacote "'+p.name+'" adicionado · '+p.items.length+' frases');
+}
+
 // ---------- category select ----------
 function setCatOptions(extra){
   const sel = $('catInput');
@@ -846,6 +973,7 @@ $('durRange').oninput = e=>{ state.overlaySec = +e.target.value; $('durVal').tex
 $('saveBtn').onclick = addOrUpdate;
 $('cancelEditBtn').onclick = resetForm;
 $('startBtn').onclick = toggleSession;
+$('sosBtn').onclick = sosNow;
 $('seedBtn').onclick = seed;
 $('exportBtn').onclick = exportList;
 $('copyBtn').onclick = copyList;
@@ -870,6 +998,7 @@ function syncSettingsUI(){
 }
 load();
 setCatOptions();
+renderPacks();
 syncSettingsUI();
 renderList();
 updateSessionUI();
