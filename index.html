@@ -164,6 +164,32 @@
   @media (max-width:600px){ .fire-card .phrase{ font-size:28px; } }
 
   .footer-note { text-align:center; font-size:12px; color:var(--muted2); margin-top:36px; line-height:1.6; }
+
+  /* SELECT, LIST TOOLS, FILTERS, CATEGORY GROUPS */
+  .sel { width:100%; font-family:inherit; font-size:14px; color:var(--text);
+    background:var(--surface2); border:1px solid var(--border2); border-radius:12px; padding:11px 13px; }
+  .sel:focus { outline:none; border-color:var(--k); }
+  .list-tools { display:flex; gap:6px; flex-wrap:wrap; }
+  .btn.mini { font-size:12px; padding:8px 12px; }
+  .filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+  .filter-bar:empty { display:none; }
+  .fchip { font-size:12px; font-weight:500; color:var(--muted); background:var(--surface2);
+    border:1px solid var(--border2); border-radius:20px; padding:6px 12px; cursor:pointer;
+    user-select:none; transition:all .15s; white-space:nowrap; }
+  .fchip:hover { color:var(--text); }
+  .fchip.active { color:var(--k); border-color:var(--k); background:var(--k-dim); }
+  .cat-group { margin-bottom:20px; }
+  .cat-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:0 2px 8px; margin-bottom:6px; border-bottom:1px solid var(--border); }
+  .cat-name { font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .cat-count { font-family:'DM Mono',monospace; font-weight:400; color:var(--muted2); margin-left:4px; letter-spacing:0; }
+
+  /* TOAST */
+  .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px);
+    background:var(--surface3); color:var(--text); border:1px solid var(--border2);
+    padding:12px 20px; border-radius:12px; font-size:13px; font-weight:500; z-index:200;
+    opacity:0; pointer-events:none; transition:all .25s; box-shadow:0 10px 30px rgba(0,0,0,0.4); }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
@@ -220,6 +246,10 @@
           </div>
           <div class="hint">A cada quanto tempo essa frase reaparece.</div>
         </div>
+        <div class="field">
+          <label>Categoria</label>
+          <select id="catInput" class="sel"></select>
+        </div>
         <div class="row">
           <button class="btn primary" id="saveBtn" style="flex:2">Adicionar lembrete</button>
           <button class="btn ghost" id="cancelEditBtn" style="display:none;">Cancelar</button>
@@ -271,8 +301,15 @@
     <div class="panel">
       <div class="list-head">
         <h2>Lembretes <span class="tag" id="countTag"></span></h2>
-        <button class="btn ghost" id="seedBtn" style="font-size:12px; padding:8px 12px;">Carregar exemplos</button>
+        <div class="list-tools">
+          <button class="btn ghost mini" id="seedBtn">Exemplos</button>
+          <button class="btn ghost mini" id="exportBtn">Exportar</button>
+          <button class="btn ghost mini" id="copyBtn">Copiar</button>
+          <button class="btn ghost mini" id="importBtn">Importar</button>
+          <input type="file" id="importFile" accept="application/json,.json" style="display:none">
+        </div>
       </div>
+      <div class="filter-bar" id="filterBar"></div>
       <div id="list"></div>
     </div>
   </div>
@@ -282,6 +319,8 @@
     Mantenha esta aba aberta durante a sessão para os lembretes dispararem.
   </div>
 </div>
+
+<div class="toast" id="toast"></div>
 
 <!-- FIRE OVERLAY -->
 <div class="overlay" id="overlay">
@@ -295,14 +334,31 @@
 
 <script>
 const LS_KEY = 'mindReminders.v1';
+const CATEGORIES = [
+  'Processo vs. resultado',
+  'Variância e longo prazo',
+  'Tilt de revanche',
+  'Ego / entitlement',
+  'Tilt de injustiça',
+  'Tilt de erro',
+  'Medo / passividade',
+  "Winner's tilt",
+  'Fisiologia e presença',
+  'Autoavaliação (A-game)',
+  'Disciplina',
+  'Gestão de banca',
+  'Personalizado'
+];
 let state = {
-  reminders: [],            // {id, phrase, intervalSec, enabled}
+  reminders: [],            // {id, phrase, intervalSec, enabled, category}
   notify: false,
   sound: true,
   visual: true,
   volume: 0.6,
   overlaySec: 8
 };
+let filterCat = null;       // category string currently filtered, or null = todas
+let currentCats = [];       // categories present in the current render (for index lookups)
 let running = false;
 let sessionStart = 0;
 let nextFire = {};          // id -> timestamp(ms)
@@ -511,12 +567,13 @@ function addOrUpdate(){
   if(!phrase){ $('phraseInput').focus(); return; }
   if(!num || num < 1){ $('intInput').focus(); return; }
   const intervalSec = num * unit;
+  const category = $('catInput').value || 'Personalizado';
   if(editingId){
     const r = state.reminders.find(x=>x.id===editingId);
-    if(r){ r.phrase = phrase; r.intervalSec = intervalSec; if(running && r.enabled) nextFire[r.id] = Date.now()+intervalSec*1000; }
+    if(r){ r.phrase = phrase; r.intervalSec = intervalSec; r.category = category; if(running && r.enabled) nextFire[r.id] = Date.now()+intervalSec*1000; }
     editingId = null;
   } else {
-    const r = { id: uid(), phrase, intervalSec, enabled:true };
+    const r = { id: uid(), phrase, intervalSec, enabled:true, category };
     state.reminders.push(r);
     if(running) nextFire[r.id] = Date.now()+intervalSec*1000;
   }
@@ -527,6 +584,7 @@ function resetForm(){
   $('phraseInput').value = '';
   $('intInput').value = 15;
   $('unitInput').value = 60;
+  $('catInput').value = 'Personalizado';
   $('formTitle').textContent = 'Novo lembrete';
   $('saveBtn').textContent = 'Adicionar lembrete';
   $('cancelEditBtn').style.display = 'none';
@@ -537,6 +595,8 @@ function editRem(id){
   $('phraseInput').value = r.phrase;
   if(r.intervalSec % 60 === 0){ $('intInput').value = r.intervalSec/60; $('unitInput').value = 60; }
   else { $('intInput').value = r.intervalSec; $('unitInput').value = 1; }
+  setCatOptions(r.category || 'Personalizado');
+  $('catInput').value = r.category || 'Personalizado';
   $('formTitle').textContent = 'Editar lembrete';
   $('saveBtn').textContent = 'Salvar alterações';
   $('cancelEditBtn').style.display = '';
@@ -557,15 +617,14 @@ function toggleRem(id){
   save(); renderList(); updateSessionUI();
 }
 
-function renderList(){
-  const list = $('list');
-  $('countTag').textContent = state.reminders.length ? `${state.reminders.filter(r=>r.enabled).length} ativos` : '';
-  if(state.reminders.length === 0){
-    list.innerHTML = `<div class="empty"><div class="ico">🎯</div>
-      <p>Nenhum lembrete ainda.<br>Crie frases de injeção de lógica ou carregue os exemplos.</p></div>`;
-    return;
-  }
-  list.innerHTML = state.reminders.map(r=>`
+function catOf(r){ return r.category || 'Personalizado'; }
+function presentCats(){
+  const inOrder = CATEGORIES.filter(c => state.reminders.some(r=>catOf(r)===c));
+  const extras = [...new Set(state.reminders.map(catOf))].filter(c=>!CATEGORIES.includes(c));
+  return inOrder.concat(extras);
+}
+function renderRemCard(r){
+  return `
     <div class="rem ${r.enabled?'':'off'}">
       <div class="accent"></div>
       <div class="rem-top">
@@ -582,67 +641,176 @@ function renderList(){
           <div class="icon-btn del" onclick="delRem('${r.id}')" title="Excluir">✕</div>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
+}
+function renderList(){
+  const list = $('list');
+  const total = state.reminders.length;
+  $('countTag').textContent = total ? `${state.reminders.filter(r=>r.enabled).length}/${total} ativos` : '';
+  if(total === 0){
+    $('filterBar').innerHTML = '';
+    list.innerHTML = `<div class="empty"><div class="ico">🎯</div>
+      <p>Nenhum lembrete ainda.<br>Crie frases de injeção de lógica, carregue os exemplos ou importe uma lista.</p></div>`;
+    return;
+  }
+  currentCats = presentCats();
+  if(filterCat && !currentCats.includes(filterCat)) filterCat = null;
+
+  // filter chips
+  $('filterBar').innerHTML =
+    `<div class="fchip ${filterCat===null?'active':''}" onclick="setFilter(-1)">Todas <span class="cat-count">${total}</span></div>` +
+    currentCats.map((c,i)=>{
+      const n = state.reminders.filter(r=>catOf(r)===c).length;
+      return `<div class="fchip ${filterCat===c?'active':''}" onclick="setFilter(${i})">${escapeHtml(c)} <span class="cat-count">${n}</span></div>`;
+    }).join('');
+
+  // groups (respect filter)
+  const shown = filterCat ? [filterCat] : currentCats;
+  list.innerHTML = shown.map((c)=>{
+    const idx = currentCats.indexOf(c);
+    const items = state.reminders.filter(r=>catOf(r)===c);
+    const on = items.filter(r=>r.enabled).length;
+    return `<div class="cat-group">
+      <div class="cat-head">
+        <div class="cat-name">${escapeHtml(c)}<span class="cat-count">${on}/${items.length}</span></div>
+        <label class="switch" title="Ligar/desligar todo o grupo"><input type="checkbox" ${on===items.length?'checked':''} onchange="toggleCategory(${idx}, this.checked)"><span class="slider"></span></label>
+      </div>
+      ${items.map(renderRemCard).join('')}
+    </div>`;
+  }).join('');
   updateCountdowns();
+}
+function setFilter(i){ filterCat = (i<0) ? null : currentCats[i]; renderList(); }
+function toggleCategory(i, on){
+  const c = currentCats[i]; if(c==null) return;
+  state.reminders.forEach(r=>{
+    if(catOf(r)===c){
+      r.enabled = on;
+      if(running && on) nextFire[r.id] = Date.now()+r.intervalSec*1000;
+      if(!on) delete nextFire[r.id];
+    }
+  });
+  save(); renderList(); updateSessionUI();
 }
 function escapeHtml(s){ return s.replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 // ---------- seed examples ----------
 const SEEDS = [
-  // Processo vs. resultado
-  ['Decisões corretas, não resultados. Joga o processo.', 15],
-  ['Você não controla a carta — controla a próxima decisão.', 10],
-  ['Bad beat não muda que a jogada certa foi certa.', 25],
-  ['Resultado de uma mão não diz nada sobre como você jogou.', 20],
-  ['Julgue suas decisões pela informação que tinha na hora.', 30],
-  // Variância e longo prazo
-  ['Variância faz parte. O longo prazo recompensa o EV.', 20],
-  ['Cada mão é independente. A anterior já acabou.', 15],
-  ['Pensa em milhares de mãos, não nesta.', 30],
-  ['Downswing não é castigo. É matemática.', 35],
-  ['Você joga contra ranges, não contra cartas específicas.', 25],
-  // Tilt de revanche
-  ['Não jogue contra ele. Jogue as suas cartas.', 12],
-  ['Recuperar a perda não é um plano. EV é o plano.', 18],
-  ['Vingança não tem EV. Solta.', 15],
-  // Tilt de ego / entitlement
-  ['Você não merece ganhar a mão. Merece tomar a decisão certa.', 25],
-  ['Largar a mão certa é uma vitória, não uma fraqueza.', 20],
-  ['Foldar não é fraqueza — é controle.', 22],
-  ['O peixe te paga no longo prazo. Deixa ele jogar mal.', 30],
-  // Tilt de injustiça / "por que sempre comigo"
-  ['O dealer não tem nada contra você. É aleatório.', 30],
-  ['"Sempre comigo" é um viés. A memória guarda as dores.', 35],
-  // Tilt de erro (depois de jogar mal)
-  ['Errou? Anota pra revisar depois. Agora, próxima mão.', 20],
-  ['Um erro não justifica o segundo. Reseta.', 18],
-  // Medo / jogar passivo demais
-  ['Medo de perder fichas tira valor. Aposta pelo motivo certo.', 28],
-  ['Joga pra ganhar, não pra não perder.', 25],
-  // Winner's tilt / excesso de confiança
-  ['Ganhando muito? Mantém o mesmo rigor das decisões.', 30],
-  ['Lucro na mesa ainda é decisão, não permissão pra relaxar.', 35],
-  // Fisiologia e presença
-  ['Respira fundo. Solta os ombros. Volta pro presente.', 30],
-  ['Tensão no corpo? Pausa de 30s antes da próxima mão.', 35],
-  ['Hidrata. Cabeça clara joga melhor.', 45],
-  ['Desgrudou os olhos da tela? Bom. Respira e volta.', 40],
-  // Autoavaliação / A-game
-  ['Está em A-game? Se não, ajusta antes de jogar mais mãos.', 40],
-  ['Cansado ou irritado? Sair agora protege a sua banca.', 50],
-  ['Qual seu nível agora: A, B ou C-game? Seja honesto.', 45],
-  // Foco e disciplina
-  ['Uma mão de cada vez. Presença total.', 15],
-  ['Disciplina no fold é onde mora o lucro.', 30],
-  ['Sem autopilot. Cada decisão é uma escolha.', 25],
-  // Banca / gestão emocional
-  ['Fichas são unidades de decisão, não dinheiro de verdade.', 35],
-  ['O melhor jogador não é o que ganha — é o que erra menos.', 40],
-  ['Stake certo pra sua banca tira o peso de cada mão.', 50]
+  ['Decisões corretas, não resultados. Joga o processo.', 15, 'Processo vs. resultado'],
+  ['Você não controla a carta — controla a próxima decisão.', 10, 'Processo vs. resultado'],
+  ['Bad beat não muda que a jogada certa foi certa.', 25, 'Processo vs. resultado'],
+  ['Resultado de uma mão não diz nada sobre como você jogou.', 20, 'Processo vs. resultado'],
+  ['Julgue suas decisões pela informação que tinha na hora.', 30, 'Processo vs. resultado'],
+  ['Variância faz parte. O longo prazo recompensa o EV.', 20, 'Variância e longo prazo'],
+  ['Cada mão é independente. A anterior já acabou.', 15, 'Variância e longo prazo'],
+  ['Pensa em milhares de mãos, não nesta.', 30, 'Variância e longo prazo'],
+  ['Downswing não é castigo. É matemática.', 35, 'Variância e longo prazo'],
+  ['Você joga contra ranges, não contra cartas específicas.', 25, 'Variância e longo prazo'],
+  ['Não jogue contra ele. Jogue as suas cartas.', 12, 'Tilt de revanche'],
+  ['Recuperar a perda não é um plano. EV é o plano.', 18, 'Tilt de revanche'],
+  ['Vingança não tem EV. Solta.', 15, 'Tilt de revanche'],
+  ['Você não merece ganhar a mão. Merece tomar a decisão certa.', 25, 'Ego / entitlement'],
+  ['Largar a mão certa é uma vitória, não uma fraqueza.', 20, 'Ego / entitlement'],
+  ['Foldar não é fraqueza — é controle.', 22, 'Ego / entitlement'],
+  ['O peixe te paga no longo prazo. Deixa ele jogar mal.', 30, 'Ego / entitlement'],
+  ['O dealer não tem nada contra você. É aleatório.', 30, 'Tilt de injustiça'],
+  ['"Sempre comigo" é um viés. A memória guarda as dores.', 35, 'Tilt de injustiça'],
+  ['Errou? Anota pra revisar depois. Agora, próxima mão.', 20, 'Tilt de erro'],
+  ['Um erro não justifica o segundo. Reseta.', 18, 'Tilt de erro'],
+  ['Medo de perder fichas tira valor. Aposta pelo motivo certo.', 28, 'Medo / passividade'],
+  ['Joga pra ganhar, não pra não perder.', 25, 'Medo / passividade'],
+  ['Ganhando muito? Mantém o mesmo rigor das decisões.', 30, "Winner's tilt"],
+  ['Lucro na mesa ainda é decisão, não permissão pra relaxar.', 35, "Winner's tilt"],
+  ['Respira fundo. Solta os ombros. Volta pro presente.', 30, 'Fisiologia e presença'],
+  ['Tensão no corpo? Pausa de 30s antes da próxima mão.', 35, 'Fisiologia e presença'],
+  ['Hidrata. Cabeça clara joga melhor.', 45, 'Fisiologia e presença'],
+  ['Desgrudou os olhos da tela? Bom. Respira e volta.', 40, 'Fisiologia e presença'],
+  ['Está em A-game? Se não, ajusta antes de jogar mais mãos.', 40, 'Autoavaliação (A-game)'],
+  ['Cansado ou irritado? Sair agora protege a sua banca.', 50, 'Autoavaliação (A-game)'],
+  ['Qual seu nível agora: A, B ou C-game? Seja honesto.', 45, 'Autoavaliação (A-game)'],
+  ['Uma mão de cada vez. Presença total.', 15, 'Disciplina'],
+  ['Disciplina no fold é onde mora o lucro.', 30, 'Disciplina'],
+  ['Sem autopilot. Cada decisão é uma escolha.', 25, 'Disciplina'],
+  ['Fichas são unidades de decisão, não dinheiro de verdade.', 35, 'Gestão de banca'],
+  ['O melhor jogador não é o que ganha — é o que erra menos.', 40, 'Gestão de banca'],
+  ['Stake certo pra sua banca tira o peso de cada mão.', 50, 'Gestão de banca']
 ];
 function seed(){
-  SEEDS.forEach(([p,m])=> state.reminders.push({ id: uid(), phrase:p, intervalSec:m*60, enabled:true }));
+  SEEDS.forEach(([p,m,c])=> state.reminders.push({ id: uid(), phrase:p, intervalSec:m*60, enabled:true, category:c }));
+  save(); renderList(); updateSessionUI(); toast('Exemplos carregados');
+}
+
+// ---------- category select ----------
+function setCatOptions(extra){
+  const sel = $('catInput');
+  const cats = CATEGORIES.slice();
+  if(extra && !cats.includes(extra)) cats.unshift(extra);
+  const cur = sel.value;
+  sel.innerHTML = cats.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  if(cur && cats.includes(cur)) sel.value = cur; else sel.value = 'Personalizado';
+}
+
+// ---------- toast ----------
+let toastTimer = null;
+function toast(msg){
+  const el = $('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=> el.classList.remove('show'), 2600);
+}
+
+// ---------- export / import ----------
+function buildExport(){
+  return {
+    app: 'mind-reminders', version: 1, exportedAt: new Date().toISOString(),
+    reminders: state.reminders.map(r=>({ phrase:r.phrase, intervalSec:r.intervalSec, enabled:r.enabled, category:catOf(r) }))
+  };
+}
+function exportList(){
+  if(state.reminders.length===0){ toast('Nada para exportar'); return; }
+  const json = JSON.stringify(buildExport(), null, 2);
+  const blob = new Blob([json], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'mind-reminders-' + new Date().toISOString().slice(0,10) + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  toast('Lista exportada');
+}
+function copyList(){
+  if(state.reminders.length===0){ toast('Nada para copiar'); return; }
+  const json = JSON.stringify(buildExport());
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(json).then(()=>toast('Lista copiada')).catch(()=>toast('Não foi possível copiar'));
+  } else {
+    toast('Cópia não suportada neste navegador');
+  }
+}
+function applyImport(data){
+  const arr = Array.isArray(data) ? data : (data && data.reminders);
+  if(!Array.isArray(arr)){ alert('Formato não reconhecido. Esperado um arquivo de lista do Mind Reminders.'); return; }
+  const clean = arr
+    .filter(x=> x && x.phrase && x.intervalSec)
+    .map(x=>({ id: uid(), phrase: String(x.phrase), intervalSec: Math.max(1, parseInt(x.intervalSec,10)||60),
+               enabled: x.enabled !== false, category: x.category || 'Personalizado' }));
+  if(clean.length===0){ alert('Nenhum lembrete válido encontrado no arquivo.'); return; }
+  let replace = false;
+  if(state.reminders.length > 0){
+    replace = confirm(`Importar ${clean.length} lembrete(s).\n\nOK = SUBSTITUIR a lista atual\nCancelar = ADICIONAR à lista atual`);
+  }
+  if(replace){ state.reminders = clean; nextFire = {}; }
+  else { state.reminders = state.reminders.concat(clean); }
+  if(running){ const now = Date.now(); clean.forEach(r=>{ if(r.enabled) nextFire[r.id] = now + r.intervalSec*1000; }); }
+  filterCat = null;
   save(); renderList(); updateSessionUI();
+  toast((replace?'Lista substituída · ':'Importados · ') + clean.length + ' lembrete(s)');
+}
+function importFromFile(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{ try { applyImport(JSON.parse(reader.result)); } catch(e){ alert('Não consegui ler o arquivo (JSON inválido).'); } };
+  reader.onerror = ()=> alert('Erro ao ler o arquivo.');
+  reader.readAsText(file);
 }
 
 // ---------- settings wiring ----------
@@ -679,6 +847,10 @@ $('saveBtn').onclick = addOrUpdate;
 $('cancelEditBtn').onclick = resetForm;
 $('startBtn').onclick = toggleSession;
 $('seedBtn').onclick = seed;
+$('exportBtn').onclick = exportList;
+$('copyBtn').onclick = copyList;
+$('importBtn').onclick = ()=> $('importFile').click();
+$('importFile').onchange = e=>{ importFromFile(e.target.files[0]); e.target.value=''; };
 $('testBtn').onclick = ()=>{
   const r = state.reminders.find(x=>x.enabled) || { phrase:'Respira. Volta pro processo.' };
   fire(r);
@@ -697,6 +869,7 @@ function syncSettingsUI(){
   setNotifyHint();
 }
 load();
+setCatOptions();
 syncSettingsUI();
 renderList();
 updateSessionUI();
