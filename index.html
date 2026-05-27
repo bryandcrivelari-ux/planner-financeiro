@@ -227,7 +227,14 @@
       </div>
 
       <div class="panel">
-        <h2>Disparo <span class="tag">som + visual</span></h2>
+        <h2>Disparo <span class="tag">notificação + som + visual</span></h2>
+        <div class="toggle-row">
+          <div>
+            <div class="t-lbl">Notificação do sistema</div>
+            <div class="t-sub">Aparece por cima do jogo, mesmo em 2º plano</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="notifyToggle"><span class="slider"></span></label>
+        </div>
         <div class="toggle-row">
           <div>
             <div class="t-lbl">Alerta sonoro</div>
@@ -242,6 +249,7 @@
           </div>
           <label class="switch"><input type="checkbox" id="visualToggle" checked><span class="slider"></span></label>
         </div>
+        <div id="notifyHint" class="hint" style="display:none; margin-top:10px;"></div>
         <div class="field" style="margin-top:16px; margin-bottom:0;">
           <label>Volume do som</label>
           <div class="range-row">
@@ -289,6 +297,7 @@
 const LS_KEY = 'mindReminders.v1';
 let state = {
   reminders: [],            // {id, phrase, intervalSec, enabled}
+  notify: false,
   sound: true,
   visual: true,
   volume: 0.6,
@@ -348,9 +357,32 @@ function playChime(){
   } catch(e){}
 }
 
+// ---------- notifications ----------
+function showNotification(phrase){
+  if(!state.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const opts = {
+    body: phrase,
+    icon: 'icon-192.png',
+    badge: 'icon-192.png',
+    tag: 'mind-reminder',
+    renotify: true,
+    requireInteraction: false,
+    silent: true   // we play our own chime
+  };
+  // Prefer the service worker (works in background / installed PWA)
+  if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+    navigator.serviceWorker.ready
+      .then(reg => reg.showNotification('🧠 Respira · volta pro processo', opts))
+      .catch(() => { try { new Notification('Mind Reminders', opts); } catch(e){} });
+  } else {
+    try { new Notification('Mind Reminders', opts); } catch(e){}
+  }
+}
+
 // ---------- fire / overlay ----------
 function fire(rem){
   playChime();
+  showNotification(rem.phrase);
   if(state.visual){
     fireQueue.push(rem.phrase);
     if($('overlay').classList.contains('show')) return;
@@ -562,29 +594,51 @@ const SEEDS = [
   ['Você não controla a carta — controla a próxima decisão.', 10],
   ['Bad beat não muda que a jogada certa foi certa.', 25],
   ['Resultado de uma mão não diz nada sobre como você jogou.', 20],
+  ['Julgue suas decisões pela informação que tinha na hora.', 30],
   // Variância e longo prazo
   ['Variância faz parte. O longo prazo recompensa o EV.', 20],
   ['Cada mão é independente. A anterior já acabou.', 15],
   ['Pensa em milhares de mãos, não nesta.', 30],
+  ['Downswing não é castigo. É matemática.', 35],
+  ['Você joga contra ranges, não contra cartas específicas.', 25],
   // Tilt de revanche
   ['Não jogue contra ele. Jogue as suas cartas.', 12],
-  ['Recuperar perda não é um plano. EV é o plano.', 18],
+  ['Recuperar a perda não é um plano. EV é o plano.', 18],
+  ['Vingança não tem EV. Solta.', 15],
   // Tilt de ego / entitlement
   ['Você não merece ganhar a mão. Merece tomar a decisão certa.', 25],
   ['Largar a mão certa é uma vitória, não uma fraqueza.', 20],
+  ['Foldar não é fraqueza — é controle.', 22],
+  ['O peixe te paga no longo prazo. Deixa ele jogar mal.', 30],
+  // Tilt de injustiça / "por que sempre comigo"
+  ['O dealer não tem nada contra você. É aleatório.', 30],
+  ['"Sempre comigo" é um viés. A memória guarda as dores.', 35],
+  // Tilt de erro (depois de jogar mal)
+  ['Errou? Anota pra revisar depois. Agora, próxima mão.', 20],
+  ['Um erro não justifica o segundo. Reseta.', 18],
+  // Medo / jogar passivo demais
+  ['Medo de perder fichas tira valor. Aposta pelo motivo certo.', 28],
+  ['Joga pra ganhar, não pra não perder.', 25],
+  // Winner's tilt / excesso de confiança
+  ['Ganhando muito? Mantém o mesmo rigor das decisões.', 30],
+  ['Lucro na mesa ainda é decisão, não permissão pra relaxar.', 35],
   // Fisiologia e presença
   ['Respira fundo. Solta os ombros. Volta pro presente.', 30],
   ['Tensão no corpo? Pausa de 30s antes da próxima mão.', 35],
   ['Hidrata. Cabeça clara joga melhor.', 45],
+  ['Desgrudou os olhos da tela? Bom. Respira e volta.', 40],
   // Autoavaliação / A-game
   ['Está em A-game? Se não, ajusta antes de jogar mais mãos.', 40],
   ['Cansado ou irritado? Sair agora protege a sua banca.', 50],
+  ['Qual seu nível agora: A, B ou C-game? Seja honesto.', 45],
   // Foco e disciplina
   ['Uma mão de cada vez. Presença total.', 15],
   ['Disciplina no fold é onde mora o lucro.', 30],
+  ['Sem autopilot. Cada decisão é uma escolha.', 25],
   // Banca / gestão emocional
   ['Fichas são unidades de decisão, não dinheiro de verdade.', 35],
-  ['O melhor jogador não é o que ganha — é o que erra menos.', 40]
+  ['O melhor jogador não é o que ganha — é o que erra menos.', 40],
+  ['Stake certo pra sua banca tira o peso de cada mão.', 50]
 ];
 function seed(){
   SEEDS.forEach(([p,m])=> state.reminders.push({ id: uid(), phrase:p, intervalSec:m*60, enabled:true }));
@@ -592,6 +646,31 @@ function seed(){
 }
 
 // ---------- settings wiring ----------
+function setNotifyHint(){
+  const el = $('notifyHint');
+  if(!('Notification' in window)){
+    el.style.display='block'; el.textContent='Este navegador não suporta notificações.'; return;
+  }
+  if(Notification.permission === 'denied'){
+    el.style.display='block'; el.textContent='Notificações bloqueadas. Libere nas permissões do site/navegador.';
+  } else if(state.notify && Notification.permission === 'granted'){
+    el.style.display='block'; el.textContent='Notificações ativas. Mantenha o app aberto (ou instalado) durante a sessão.';
+  } else {
+    el.style.display='none';
+  }
+}
+$('notifyToggle').onchange = async e=>{
+  if(e.target.checked){
+    if(!('Notification' in window)){ e.target.checked=false; setNotifyHint(); return; }
+    let perm = Notification.permission;
+    if(perm === 'default'){ perm = await Notification.requestPermission(); }
+    if(perm !== 'granted'){ e.target.checked=false; state.notify=false; save(); setNotifyHint(); return; }
+    state.notify = true;
+  } else {
+    state.notify = false;
+  }
+  save(); setNotifyHint();
+};
 $('soundToggle').onchange = e=>{ state.sound = e.target.checked; save(); };
 $('visualToggle').onchange = e=>{ state.visual = e.target.checked; save(); };
 $('volRange').oninput = e=>{ state.volume = e.target.value/100; $('volVal').textContent = e.target.value+'%'; save(); };
@@ -608,10 +687,14 @@ $('phraseInput').addEventListener('keydown', e=>{ if(e.key==='Enter' && (e.metaK
 
 // ---------- init ----------
 function syncSettingsUI(){
+  // a notificação só fica ativa se o navegador ainda concede permissão
+  if(state.notify && (!('Notification' in window) || Notification.permission !== 'granted')) state.notify = false;
+  $('notifyToggle').checked = state.notify;
   $('soundToggle').checked = state.sound;
   $('visualToggle').checked = state.visual;
   $('volRange').value = Math.round(state.volume*100); $('volVal').textContent = Math.round(state.volume*100)+'%';
   $('durRange').value = state.overlaySec; $('durVal').textContent = state.overlaySec+'s';
+  setNotifyHint();
 }
 load();
 syncSettingsUI();
